@@ -2,15 +2,18 @@
 License Plate Recognition Pipeline
 Combines YOLO detection with OCR for end-to-end plate recognition
 Supports: DeepSeek OCR-2 (GPU) → PaddleOCR (CPU) → EasyOCR (CPU fallback)
+Now also supports video input with CSV export.
 """
 import os
 import cv2
+import csv
 import json
 import torch
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from plate_detector import PlateDetector
 from ocr_reader import OCRReader, PaddleOCRReader, EasyOCRReader, EnsembleOCRReader
+from indian_plate_formatter import IndianPlateFormatter
 import config
 
 
@@ -59,6 +62,7 @@ class LicensePlateRecognizer:
         
         # Lazy load OCR model
         self._ocr_loaded = False
+        self._formatter = IndianPlateFormatter()
     
     def _ensure_ocr_loaded(self):
         """Lazy load OCR model when first needed"""
@@ -224,6 +228,171 @@ class LicensePlateRecognizer:
         print(f"Results summary saved: {summary_path}")
         print(f"{'='*50}")
 
+    def process_video(
+        self,
+        video_path: str,
+        frame_skip: int = None,
+        csv_path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Process a video, running plate detection + OCR on sampled frames.
+        Only writes a plate to CSV once it passes format validation, to avoid
+        noisy reads when the car is far/blurry.
+        """
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video not found: {video_path}")
+
+        frame_skip = frame_skip or getattr(config, "VIDEO_FRAME_SKIP", 2)
+
+        print(f"\n{'='*50}")
+        print(f"Processing video: {os.path.basename(video_path)}")
+        print(f"{'='*50}")
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {video_path}")
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps <= 0:
+            fps = 30.0
+
+        # Temporary frame directory
+        tmp_dir = os.path.join(config.OUTPUT_DIR, "video_frames")
+        os.makedirs(tmp_dir, exist_ok=True)
+
+        # Track unique, high-quality plates we have already emitted
+        seen_plates: Dict[str, Dict[str, Any]] = {}
+        rows: List[Dict[str, Any]] = []
+
+        frame_idx = 0
+        video_name = os.path.basename(video_path)
+
+        # Ensure OCR is loaded once
+        self._ensure_ocr_loaded()
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_idx % frame_skip != 0:
+                frame_idx += 1
+                continue
+
+            timestamp_sec = frame_idx / fps
+
+            # Save current frame as an image and reuse the existing image pipeline
+            frame_filename = f"{os.path.splitext(video_name)[0]}_f{frame_idx:06d}.jpg"
+            frame_path = os.path.join(tmp_dir, frame_filename)
+            cv2.imwrite(frame_path, frame)
+
+            try:
+                # Reuse existing plate detection + OCR logic
+                results = self.process_image(
+                    frame_path,
+                    save_crops=True,
+                    save_visualization=False,
+                )
+            except Exception as e:
+                print(f"Error processing frame {frame_idx}: {e}")
+                frame_idx += 1
+                continue
+
+            for r in results:
+                crop_path = r.get("crop_path")
+                det_conf = r.get("confidence", 0.0)
+                bbox = r.get("bbox", [0, 0, 0, 0])
+
+                if not crop_path or not os.path.exists(crop_path):
+                    continue
+
+                # Use validation-aware OCR if available to avoid low-confidence garbage
+                plate_text = ""
+                is_valid = False
+
+                if hasattr(self.ocr, "read_plate_with_validation"):
+                    try:
+                        val = self.ocr.read_plate_with_validation(crop_path)
+                        plate_text = (val.get("formatted") or val.get("raw") or "").strip().upper()
+                        is_valid = bool(val.get("is_valid"))
+                    except Exception as e:
+                        print(f"Validation OCR error on frame {frame_idx}: {e}")
+                        continue
+                else:
+                    # Fallback: validate the already-formatted text using the Indian formatter
+                    raw_text = (r.get("text") or "").strip().upper()
+                    is_valid, formatted = self._formatter.validate_plate(raw_text)
+                    plate_text = (formatted if is_valid else raw_text).strip().upper()
+
+                if not is_valid:
+                    # Skip unreadable / low-quality / invalid-format plates
+                    continue
+
+                key = plate_text.replace(" ", "")
+                if key in seen_plates:
+                    # We already have a good read for this plate; no need to spam CSV
+                    continue
+
+                record = {
+                    "video": video_name,
+                    "plate": plate_text,
+                    "frame_index": frame_idx,
+                    "time_sec": round(timestamp_sec, 2),
+                    "det_conf": float(f"{det_conf:.3f}"),
+                    "bbox_x1": bbox[0],
+                    "bbox_y1": bbox[1],
+                    "bbox_x2": bbox[2],
+                    "bbox_y2": bbox[3],
+                    "ocr_engine": self.ocr_engine_name,
+                }
+                seen_plates[key] = record
+                rows.append(record)
+
+            frame_idx += 1
+
+        cap.release()
+
+        # Clean up temporary frames to avoid clutter
+        try:
+            import shutil
+
+            shutil.rmtree(tmp_dir)
+        except Exception:
+            # Best-effort cleanup; ignore errors
+            pass
+
+        if not rows:
+            print("\nNo high-confidence, valid plates detected in video.")
+            return []
+
+        if csv_path is None:
+            base = os.path.splitext(video_name)[0]
+            csv_path = os.path.join(config.OUTPUT_DIR, f"{base}_plates.csv")
+
+        fieldnames = [
+            "video",
+            "plate",
+            "frame_index",
+            "time_sec",
+            "det_conf",
+            "bbox_x1",
+            "bbox_y1",
+            "bbox_x2",
+            "bbox_y2",
+            "ocr_engine",
+        ]
+
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        print(f"\n{'='*50}")
+        print(f"Video results saved: {csv_path}")
+        print(f"{'='*50}")
+
+        return rows
+
 
 def main():
     """CLI for the pipeline"""
@@ -272,20 +441,27 @@ Examples:
     
     # Process
     if os.path.isfile(args.input):
-        results = pipeline.process_image(
-            args.input,
-            save_crops=not args.no_crops,
-            save_visualization=not args.no_vis
-        )
-        
-        print("\n" + "="*50)
-        print("RESULTS")
-        print("="*50)
-        for r in results:
-            print(f"  Plate: {r['text']}")
-            print(f"  Confidence: {r['confidence']:.2f}")
-            print(f"  Bounding Box: {r['bbox']}")
-            print()
+        ext = os.path.splitext(args.input)[1].lower()
+        if ext in getattr(config, "IMAGE_EXTENSIONS", []):
+            results = pipeline.process_image(
+                args.input,
+                save_crops=not args.no_crops,
+                save_visualization=not args.no_vis
+            )
+            
+            print("\n" + "="*50)
+            print("RESULTS")
+            print("="*50)
+            for r in results:
+                print(f"  Plate: {r['text']}")
+                print(f"  Confidence: {r['confidence']:.2f}")
+                print(f"  Bounding Box: {r['bbox']}")
+                print()
+        elif ext in getattr(config, "VIDEO_EXTENSIONS", []):
+            # Video input: run frame-by-frame processing and export CSV
+            pipeline.process_video(args.input)
+        else:
+            raise ValueError(f"Unsupported input file type: {ext}")
     else:
         pipeline.process_directory(args.input)
     

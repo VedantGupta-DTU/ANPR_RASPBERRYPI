@@ -29,3 +29,7 @@ USE_FLASH_ATTENTION = True  # Set to False if flash-attn not installed
 # Processing settings
 DEVICE = "cuda"  # Use "cpu" if no GPU available
 IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+
+# Video settings
+VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv"]
+VIDEO_FRAME_SKIP = 2  # Process every Nth frame for speed

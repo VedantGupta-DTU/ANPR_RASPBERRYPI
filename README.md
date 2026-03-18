@@ -25,8 +25,8 @@ A high-accuracy Automatic Number Plate Recognition (ANPR) system optimized for I
 3.  **Download Model Weights:**
     Due to GitHub file size limits, the trained model weights are hosted separately.
     
-    *   **[Download best.pt (YOLOv8 Weights)](YOUR_LINK_HERE)** - Place this file in the root directory.
-    *   **[Download best.onnx (ONNX Export)](YOUR_LINK_HERE)** - Optional, for ONNX inference.
+    *   **[Download best.pt (YOLOv8 Weights)](https://drive.google.com/file/d/1atAcgSSs3l1JLnFYbwA9-fYeTq2XbuKi/view?usp=sharing)** - Place this file in the root directory.
+    
 
 ## Usage
 
