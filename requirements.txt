@@ -1,25 +1,39 @@
 # License Plate OCR Pipeline - Dependencies
 
-# YOLO for detection
-ultralytics>=8.0.0
+# YOLO detection (not needed — using pure onnxruntime via onnx_detector.py)
+# ultralytics>=8.0.0
 
-# DeepSeek OCR-2 dependencies
-transformers==4.46.3
-tokenizers==0.20.3
-torch>=2.0.0
-torchvision>=0.15.0
+# DeepSeek OCR-2 dependencies (heavy, skip for Pi deployment)
+# transformers==4.46.3
+# tokenizers==0.20.3
+# torch>=2.0.0
+# torchvision>=0.15.0
 
 # Image processing
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0  # Use headless for Pi to prevent missing GUI/X11 dependency errors
 Pillow>=10.0.0
 numpy>=1.24.0
 
 # OCR utilities
 PyMuPDF
 img2pdf
-einops
-easydict
-addict
+# einops
+# easydict
+# addict
 
 # For flash attention (optional, GPU only)
 # flash-attn>=2.0.0  # Uncomment if you have CUDA GPU
+
+# MongoDB database
+pymongo>=4.0.0
+dnspython>=2.0.0
+
+# RapidOCR (PaddleOCR models via ONNX Runtime — works perfectly on Raspberry Pi ARM64)
+rapidocr-onnxruntime>=1.3.0
+
+# PaddleOCR (Native version — does NOT work on Raspberry Pi ARM64 due to segfault)
+# paddlepaddle>=2.6.0
+# paddleocr>=2.7.3
+
+# ONNX inference (for best.onnx fast mode on CPU/Pi)
+onnxruntime>=1.15.0

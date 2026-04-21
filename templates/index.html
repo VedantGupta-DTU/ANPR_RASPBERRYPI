@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANPR — License Plate Recognition</title>
+    <meta name="description" content="Automatic Number Plate Recognition system for Indian license plates">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+    <div class="header-content">
+        <div class="logo">
+            <div class="logo-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="6" width="20" height="12" rx="2"/>
+                    <path d="M6 10h2m2 0h6m2 0h2"/>
+                    <path d="M6 14h12"/>
+                </svg>
+            </div>
+            <h1>ANPR <span class="logo-sub">Pipeline</span></h1>
+        </div>
+        <p class="header-desc">Automatic Number Plate Recognition · Indian License Plates</p>
+    </div>
+</header>
+
+<!-- Tab Navigation -->
+<nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="live" onclick="switchTab('live')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 1v2m0 18v2m11-11h-2M3 12H1m16.07-7.07-1.41 1.41M7.34 16.66l-1.41 1.41m12.14 0-1.41-1.41M7.34 7.34 5.93 5.93"/>
+        </svg>
+        Live Demo
+    </button>
+    <button class="tab" data-tab="video" onclick="switchTab('video')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="23 7 16 12 23 17 23 7"/>
+            <rect x="1" y="5" width="15" height="14" rx="2"/>
+        </svg>
+        Video Upload
+    </button>
+    <button class="tab" data-tab="image" onclick="switchTab('image')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+        </svg>
+        Image Upload
+    </button>
+</nav>
+
+<!-- Main Content -->
+<main class="main">
+
+    <!-- Live Demo Tab -->
+    <section class="tab-content active" id="tab-live">
+        <div class="panel-grid">
+            <div class="card feed-card">
+                <div class="card-header">
+                    <h2>Camera Feed</h2>
+                    <div class="live-controls">
+                        <select id="camera-source" class="btn" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-primary); margin-right: 8px;">
+                            <option value="0">Camera 0 (Built-in)</option>
+                            <option value="1">Camera 1 (External USB)</option>
+                            <option value="2">Camera 2</option>
+                        </select>
+                        <button class="btn btn-primary" id="btn-live-start" onclick="startLive()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            Start Camera
+                        </button>
+                        <button class="btn btn-danger" id="btn-live-stop" onclick="stopLive()" style="display:none">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+                            Stop
+                        </button>
+                    </div>
+                </div>
+                <div class="feed-container" id="live-feed-container">
+                    <div class="feed-placeholder" id="live-placeholder">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                            <circle cx="12" cy="13" r="4"/>
+                        </svg>
+                        <p>Click <strong>Start Camera</strong> to begin live detection</p>
+                    </div>
+                    <img id="live-stream" src="" alt="Live Feed" style="display:none">
+                </div>
+            </div>
+            <div class="card results-card" id="live-results-card">
+                <div class="card-header">
+                    <h2>Live Status</h2>
+                    <span class="badge" id="live-badge">Inactive</span>
+                </div>
+                <div class="results-info">
+                    <p class="results-hint">Plates will appear in the console and CSV in real-time as vehicles leave the frame.</p>
+                    <div class="stat-grid">
+                        <div class="stat">
+                            <span class="stat-label">Status</span>
+                            <span class="stat-value" id="live-status-text">Stopped</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Engine</span>
+                            <span class="stat-value">PaddleOCR</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Video Upload Tab -->
+    <section class="tab-content" id="tab-video">
+        <div class="panel-grid">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Upload Video</h2>
+                </div>
+                <div class="upload-zone" id="video-drop-zone" onclick="document.getElementById('video-input').click()">
+                    <input type="file" id="video-input" accept=".mp4,.avi,.mov,.mkv" hidden onchange="handleVideoUpload(this)">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
+                        <polygon points="23 7 16 12 23 17 23 7"/>
+                        <rect x="1" y="5" width="15" height="14" rx="2"/>
+                    </svg>
+                    <p class="upload-text">Drag & drop a video file here</p>
+                    <p class="upload-hint">or click to browse · MP4, AVI, MOV, MKV</p>
+                </div>
+                <!-- Progress -->
+                <div class="progress-container" id="video-progress" style="display:none">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="video-progress-fill"></div>
+                    </div>
+                    <p class="progress-text" id="video-progress-text">Processing...</p>
+                </div>
+            </div>
+            <div class="card results-card">
+                <div class="card-header">
+                    <h2>Results</h2>
+                    <span class="badge" id="video-badge">Waiting</span>
+                </div>
+                <div id="video-results">
+                    <p class="results-hint">Upload a video to see detected plates here.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Image Upload Tab -->
+    <section class="tab-content" id="tab-image">
+        <div class="panel-grid">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Upload Image</h2>
+                </div>
+                <div class="upload-zone" id="image-drop-zone" onclick="document.getElementById('image-input').click()">
+                    <input type="file" id="image-input" accept=".jpg,.jpeg,.png,.bmp,.webp" hidden onchange="handleImageUpload(this)">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <polyline points="21 15 16 10 5 21"/>
+                    </svg>
+                    <p class="upload-text">Drag & drop an image here</p>
+                    <p class="upload-hint">or click to browse · JPG, PNG, BMP, WebP</p>
+                </div>
+                <!-- Loading -->
+                <div class="progress-container" id="image-progress" style="display:none">
+                    <div class="spinner"></div>
+                    <p class="progress-text">Detecting plates...</p>
+                </div>
+                <!-- Annotated Image -->
+                <div class="annotated-container" id="image-annotated" style="display:none">
+                    <img id="annotated-img" src="" alt="Annotated">
+                </div>
+            </div>
+            <div class="card results-card">
+                <div class="card-header">
+                    <h2>Results</h2>
+                    <span class="badge" id="image-badge">Waiting</span>
+                </div>
+                <div id="image-results">
+                    <p class="results-hint">Upload an image to see detected plates here.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<!-- Footer -->
+<footer class="footer">
+    <p>DTU Security · ANPR Pipeline · YOLO v8 + PaddleOCR</p>
+</footer>
+
+<script>
+// =====================================================================
+// Tab Switching
+// =====================================================================
+function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+    document.getElementById(`tab-${tab}`).classList.add('active');
+}
+
+// =====================================================================
+// Drag & Drop
+// =====================================================================
+['video-drop-zone', 'image-drop-zone'].forEach(id => {
+    const zone = document.getElementById(id);
+    if (!zone) return;
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            if (id === 'video-drop-zone') uploadVideo(files[0]);
+            else uploadImage(files[0]);
+        }
+    });
+});
+
+// =====================================================================
+// Live Demo
+// =====================================================================
+function startLive() {
+    const stream = document.getElementById('live-stream');
+    const placeholder = document.getElementById('live-placeholder');
+    const btnStart = document.getElementById('btn-live-start');
+    const btnStop = document.getElementById('btn-live-stop');
+    const badge = document.getElementById('live-badge');
+    const statusText = document.getElementById('live-status-text');
+    const source = document.getElementById('camera-source').value;
+
+    stream.src = '/api/live-feed?source=' + encodeURIComponent(source) + '&_=' + Date.now();
+    stream.style.display = 'block';
+    placeholder.style.display = 'none';
+    btnStart.style.display = 'none';
+    document.getElementById('camera-source').style.display = 'none';
+    btnStop.style.display = 'inline-flex';
+    badge.textContent = 'Active';
+    badge.className = 'badge badge-success';
+    statusText.textContent = 'Streaming';
+}
+
+function stopLive() {
+    fetch('/api/live-stop', { method: 'POST' });
+
+    const stream = document.getElementById('live-stream');
+    const placeholder = document.getElementById('live-placeholder');
+    const btnStart = document.getElementById('btn-live-start');
+    const btnStop = document.getElementById('btn-live-stop');
+    const badge = document.getElementById('live-badge');
+    const statusText = document.getElementById('live-status-text');
+
+    stream.src = '';
+    stream.style.display = 'none';
+    placeholder.style.display = 'flex';
+    btnStart.style.display = 'inline-flex';
+    document.getElementById('camera-source').style.display = 'inline-flex';
+    btnStop.style.display = 'none';
+    badge.textContent = 'Inactive';
+    badge.className = 'badge';
+    statusText.textContent = 'Stopped';
+}
+
+// =====================================================================
+// Image Upload
+// =====================================================================
+function handleImageUpload(input) {
+    if (input.files.length > 0) uploadImage(input.files[0]);
+}
+
+function uploadImage(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    document.getElementById('image-progress').style.display = 'flex';
+    document.getElementById('image-annotated').style.display = 'none';
+    document.getElementById('image-badge').textContent = 'Processing...';
+    document.getElementById('image-badge').className = 'badge badge-warn';
+    document.getElementById('image-results').innerHTML = '<p class="results-hint">Processing...</p>';
+
+    fetch('/api/process-image', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('image-progress').style.display = 'none';
+
+            if (data.error) {
+                document.getElementById('image-badge').textContent = 'Error';
+                document.getElementById('image-badge').className = 'badge badge-danger';
+                document.getElementById('image-results').innerHTML =
+                    `<p class="results-error">${data.error}</p>`;
+                return;
+            }
+
+            // Show annotated image
+            if (data.annotated_image) {
+                document.getElementById('annotated-img').src = data.annotated_image;
+                document.getElementById('image-annotated').style.display = 'block';
+            }
+
+            // Build results
+            const plates = data.plates || [];
+            document.getElementById('image-badge').textContent = `${plates.length} plate(s)`;
+            document.getElementById('image-badge').className = plates.length > 0 ? 'badge badge-success' : 'badge badge-warn';
+
+            let html = `<div class="stat-grid"><div class="stat"><span class="stat-label">Latency</span><span class="stat-value">${data.elapsed_ms} ms</span></div><div class="stat"><span class="stat-label">Detections</span><span class="stat-value">${data.all_detections.length}</span></div></div>`;
+
+            if (plates.length > 0) {
+                html += '<table class="results-table"><thead><tr><th>Plate</th><th>Det Conf</th><th>OCR Conf</th></tr></thead><tbody>';
+                plates.forEach(p => {
+                    html += `<tr><td class="plate-text">${p.plate}</td><td>${p.det_conf}</td><td>${p.ocr_conf}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p class="results-hint">No valid plates detected.</p>';
+            }
+
+            document.getElementById('image-results').innerHTML = html;
+        })
+        .catch(err => {
+            document.getElementById('image-progress').style.display = 'none';
+            document.getElementById('image-badge').textContent = 'Error';
+            document.getElementById('image-badge').className = 'badge badge-danger';
+            document.getElementById('image-results').innerHTML =
+                `<p class="results-error">Request failed: ${err.message}</p>`;
+        });
+}
+
+// =====================================================================
+// Video Upload
+// =====================================================================
+function handleVideoUpload(input) {
+    if (input.files.length > 0) uploadVideo(input.files[0]);
+}
+
+function uploadVideo(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    document.getElementById('video-progress').style.display = 'flex';
+    document.getElementById('video-badge').textContent = 'Processing...';
+    document.getElementById('video-badge').className = 'badge badge-warn';
+    document.getElementById('video-results').innerHTML = '<p class="results-hint">Processing video... This may take a while.</p>';
+
+    // Animate progress bar
+    const fill = document.getElementById('video-progress-fill');
+    const text = document.getElementById('video-progress-text');
+    let progress = 0;
+    const interval = setInterval(() => {
+        progress = Math.min(progress + Math.random() * 3, 90);
+        fill.style.width = progress + '%';
+        text.textContent = `Processing... ${Math.round(progress)}%`;
+    }, 500);
+
+    fetch('/api/process-video', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+            clearInterval(interval);
+            fill.style.width = '100%';
+            text.textContent = 'Complete!';
+            setTimeout(() => {
+                document.getElementById('video-progress').style.display = 'none';
+            }, 1000);
+
+            if (data.error) {
+                document.getElementById('video-badge').textContent = 'Error';
+                document.getElementById('video-badge').className = 'badge badge-danger';
+                document.getElementById('video-results').innerHTML =
+                    `<p class="results-error">${data.error}</p>`;
+                return;
+            }
+
+            const plates = data.plates || [];
+            document.getElementById('video-badge').textContent = `${plates.length} plate(s)`;
+            document.getElementById('video-badge').className = plates.length > 0 ? 'badge badge-success' : 'badge badge-warn';
+
+            let html = `<div class="stat-grid"><div class="stat"><span class="stat-label">Processing Time</span><span class="stat-value">${(data.elapsed_ms / 1000).toFixed(1)}s</span></div><div class="stat"><span class="stat-label">Frames</span><span class="stat-value">${data.frame_count}</span></div></div>`;
+
+            if (plates.length > 0) {
+                html += '<table class="results-table"><thead><tr><th>Plate</th><th>Conf</th><th>Reads</th><th>Time</th></tr></thead><tbody>';
+                plates.forEach(p => {
+                    html += `<tr><td class="plate-text">${p.plate}</td><td>${p.det_conf}</td><td>${p.num_reads}</td><td>${p.time_sec}s</td></tr>`;
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p class="results-hint">No valid plates detected in the video.</p>';
+            }
+
+            document.getElementById('video-results').innerHTML = html;
+        })
+        .catch(err => {
+            clearInterval(interval);
+            document.getElementById('video-progress').style.display = 'none';
+            document.getElementById('video-badge').textContent = 'Error';
+            document.getElementById('video-badge').className = 'badge badge-danger';
+            document.getElementById('video-results').innerHTML =
+                `<p class="results-error">Request failed: ${err.message}</p>`;
+        });
+}
+</script>
+
+</body>
+</html>

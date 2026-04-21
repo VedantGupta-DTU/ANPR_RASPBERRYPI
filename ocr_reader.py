@@ -6,7 +6,6 @@ Includes image preprocessing for improved license plate accuracy
 import os
 import cv2
 import numpy as np
-import torch
 from PIL import Image
 from typing import Optional, List
 import config
@@ -304,6 +303,7 @@ class EasyOCRReader:
         if self.reader is not None:
             return
         import easyocr
+        import torch
         print(f"Loading EasyOCR for languages: {self.languages}")
         self.reader = easyocr.Reader(self.languages, gpu=torch.cuda.is_available())
         print("EasyOCR loaded!")
@@ -459,6 +459,7 @@ class OCRReader:
     """DeepSeek OCR-2 based text reader (requires CUDA GPU)"""
     
     def __init__(self, model_name: str = None, device: str = None):
+        import torch
         self.model_name = model_name or config.OCR_MODEL_NAME
         self.device = device or config.DEVICE
         if self.device == "cuda" and not torch.cuda.is_available():
@@ -475,10 +476,14 @@ class OCRReader:
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
         attn = 'flash_attention_2' if config.USE_FLASH_ATTENTION else 'eager'
         try:
+            from transformers import AutoModel, AutoTokenizer
+            import torch
             self.model = AutoModel.from_pretrained(
                 self.model_name, _attn_implementation=attn,
                 trust_remote_code=True, use_safetensors=True)
         except Exception:
+            from transformers import AutoModel
+            import torch
             self.model = AutoModel.from_pretrained(
                 self.model_name, trust_remote_code=True, use_safetensors=True)
         self.model = self.model.eval()

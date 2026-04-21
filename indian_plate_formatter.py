@@ -197,138 +197,62 @@ class IndianPlateFormatter:
     
     def _apply_ocr_corrections_alt(self, text: str) -> str:
         """
-        Alternative OCR corrections: tries O instead of Q for series positions,
-        and 6 instead of 0 for G in number positions. Used as a fallback when
-        the primary corrections produce an invalid state code.
+        Alternative OCR corrections are no longer used since we rely on the
+        strict user-defined positional logic and the advanced candidate ranking
+        in video_pipeline.py. We simply return the primary strict corrections.
         """
-        if len(text) < 6:
-            return text
-        result = list(text)
-        # State: same as primary
-        digit_to_letter = {'0': 'O', '1': 'I', '5': 'S', '8': 'B', '6': 'G', '2': 'Z', '7': 'T'}
-        for i in range(min(2, len(result))):
-            if result[i] in digit_to_letter:
-                result[i] = digit_to_letter[result[i]]
-        # District: same as primary
-        letter_to_digit = {'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'G': '0', 'Z': '2', 'T': '1', 'Q': '0'}
-        for i in range(2, min(4, len(result))):
-            if result[i] in letter_to_digit:
-                result[i] = letter_to_digit[result[i]]
-        if len(result) > 2 and result[2].isdigit():
-            if len(result) > 3 and (result[3].isdigit() or result[3] in letter_to_digit):
-                dist_end = 4
-            else:
-                dist_end = 3
-        else:
-            dist_end = 2
-        for i in range(2, min(dist_end, len(result))):
-            if result[i] in letter_to_digit:
-                result[i] = letter_to_digit[result[i]]
-        num_start = len(result)
-        for i in range(len(result) - 1, dist_end - 1, -1):
-            if result[i].isdigit() or result[i] in letter_to_digit:
-                num_start = i
-            else:
-                break
-        num_len = len(result) - num_start
-        if num_len > 4:
-            num_start += (num_len - 4)
-        # Series: use O instead of Q (alternative)
-        alt_series_d2l = {'0': 'O', '1': 'I', '5': 'S', '8': 'B', '6': 'G', '2': 'Z', '7': 'T'}
-        for i in range(dist_end, min(num_start, len(result))):
-            if result[i] in alt_series_d2l:
-                result[i] = alt_series_d2l[result[i]]
-        # Number: same as primary
-        number_l2d = {'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'G': '0', 'Z': '2', 'T': '1', 'Q': '0'}
-        for i in range(num_start, len(result)):
-            if result[i] in number_l2d:
-                result[i] = number_l2d[result[i]]
-        return ''.join(result)
+        return self._apply_ocr_corrections(text)
     
     def _apply_ocr_corrections(self, text: str) -> str:
         """
-        Apply context-aware OCR corrections
-        
-        For Indian plates:
-        - First 2 chars should be letters (state code)
-        - Next 1-2 chars should be digits (district)
-        - Next 1-3 chars should be letters (series)
-        - Last 1-4 chars should be digits (number)
+        Apply strict positional OCR corrections based on user logic:
+        - First 2 characters must be letters
+        - 3rd character must be a number
+        - Last 4 characters must be numbers
+        - 5th character from last must be a letter
+        - Middle characters left ambiguous
         """
-        if len(text) < 6:
+        if len(text) < 7:
             return text
-        
+            
         result = list(text)
         
-        # --- Position 0-1: State code (must be letters) ---
-        digit_to_letter = {'0': 'O', '1': 'I', '5': 'S', '8': 'B', '6': 'G', '2': 'Z', '7': 'T'}
-        for i in range(min(2, len(result))):
+        digit_to_letter = {'0': 'O', '1': 'I', '2': 'Z', '4': 'A', '5': 'S', '6': 'G', '7': 'T', '8': 'B'}
+        letter_to_digit = {'O': '0', 'I': '1', 'L': '1', 'Z': '2', 'A': '4', 'S': '5', 'G': '6', 'B': '8', 'T': '7', 'D': '0', 'Q': '0'}
+        
+        # 1. First 2 characters must be letters
+        for i in range(2):
             if result[i] in digit_to_letter:
                 result[i] = digit_to_letter[result[i]]
-        
-        # --- Position 2-3: District code (must be digits) ---
-        # G -> 0 here (on plates, G is almost always a misread 0, not 6)
-        letter_to_digit = {'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'G': '0', 'Z': '2', 'T': '1', 'Q': '0'}
-        for i in range(2, min(4, len(result))):
+                
+        # 2a. 3rd character must be a number
+        if result[2] in letter_to_digit:
+            result[2] = letter_to_digit[result[2]]
+            
+        # 2b. 4th character heuristic: if it strongly resembles a digit, assume it's
+        # the second half of a 2-digit district code. (Fixes HR 2S -> HR 25).
+        # Otherwise, if it resembles a letter, it must be the start of the series.
+        if len(result) > 3:
+            if result[3] in letter_to_digit:
+                result[3] = letter_to_digit[result[3]]
+            elif result[3] in digit_to_letter:
+                result[3] = digit_to_letter[result[3]]
+                
+        # 2c. Middle characters (index 4 up to the padding) MUST be letters (Series region)
+        for i in range(4, len(result) - 5):
+            if result[i] in digit_to_letter:
+                result[i] = digit_to_letter[result[i]]
+            
+        # 3. Last 4 characters must be numbers
+        for i in range(len(result) - 4, len(result)):
             if result[i] in letter_to_digit:
                 result[i] = letter_to_digit[result[i]]
-        
-        # --- Find where series (letters) starts and trailing number (digits) begins ---
-        # After the district code (pos 2-3), find consecutive letters = series,
-        # then remaining chars = number (digits)
-        # Determine district length: check if char at position 2 and 3 are digits
-        if len(result) > 2 and result[2].isdigit():
-            # At least one digit at pos 2
-            if len(result) > 3 and (result[3].isdigit() or result[3] in letter_to_digit):
-                 dist_end = 4
-            else:
-                 dist_end = 3
-        else:
-            # Fallback (maybe district matches letter_to_digit mapping that wasn't applied?)
-            dist_end = 2
-        
-        # Ensure district positions are digits
-        for i in range(2, min(dist_end, len(result))):
-            if result[i] in letter_to_digit:
-                result[i] = letter_to_digit[result[i]]
-        
-        # --- Find the trailing digits (number) by scanning from the end ---
-        # Work backwards to find where the final number block starts
-        num_start = len(result)
-        for i in range(len(result) - 1, dist_end - 1, -1):
-            is_dig = result[i].isdigit()
-            in_map = result[i] in letter_to_digit
-            if is_dig or in_map:
-                num_start = i
-            else:
-                break
-        
-        # Heuristic: Indian plates always have exactly 4 trailing digits as the number.
-        # If the number block has > 4 digits, the extra leading digits are actually
-        # series letters misread as digits by OCR (e.g. Q -> 0, S -> 5).
-        # Move those extra digits into the series region so they get letter-converted.
-        num_len = len(result) - num_start
-        if num_len > 4:
-            extra_digits = num_len - 4
-            num_start += extra_digits  # Shift number start to keep only last 4 digits
-            # The region [dist_end : num_start] is now Series, and will be letter-converted below
-
-        
-        # --- Series region: chars between district and number (should be letters) ---
-        # Default: 0 -> O (most common). The Q variant is tried separately via
-        # _apply_ocr_corrections_alt and extract_components picks the best match.
-        series_digit_to_letter = {'0': 'O', '1': 'I', '5': 'S', '8': 'B', '6': 'G', '2': 'Z', '7': 'T'}
-        for i in range(dist_end, min(num_start, len(result))):
-            if result[i] in series_digit_to_letter:
-                result[i] = series_digit_to_letter[result[i]]
-        
-        # --- Number region: trailing chars (should be digits) ---
-        # G -> 0 (G is almost always a misread 0 on plates, not 6)
-        number_letter_to_digit = {'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'G': '0', 'Z': '2', 'T': '1', 'Q': '0'}
-        for i in range(num_start, len(result)):
-            if result[i] in number_letter_to_digit:
-                result[i] = number_letter_to_digit[result[i]]
-        
+                
+        # 4. 5th character from last must be a letter
+        if len(result) >= 5:
+            if result[-5] in digit_to_letter:
+                result[-5] = digit_to_letter[result[-5]]
+                
         return ''.join(result)
     
     def format_plate(self, text: str) -> str:
