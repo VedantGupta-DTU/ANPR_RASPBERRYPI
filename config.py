@@ -13,8 +13,8 @@ MODEL_PATH_ONNX = os.path.join(BASE_DIR, "best.onnx")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 TEST_IMAGES_DIR = os.path.join(BASE_DIR, "test_images")
 
-# YOLO inference input size
-YOLO_IMGSZ = 640
+# YOLO inference input size (320 = ~4× faster than 640 on edge devices)
+YOLO_IMGSZ = 320
 
 # Create directories if they don't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -40,7 +40,7 @@ IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
 
 # Video settings
 VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv"]
-VIDEO_FRAME_SKIP = 2  # Process every Nth frame for speed
+VIDEO_FRAME_SKIP = 5  # Process every 5th frame (essential for Jetson/Pi)
 
 # Tracking / confirmation settings (video_pipeline.py)
 # Only output a plate if its track is stable across multiple sampled frames.

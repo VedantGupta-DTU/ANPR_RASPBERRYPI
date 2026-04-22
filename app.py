@@ -273,6 +273,14 @@ def _generate_live_frames(source=0):
             
             retry_count = 0
 
+            # ── Edge optimization: cap frame resolution to 640px wide ──
+            max_w = 640
+            h_orig, w_orig = frame.shape[:2]
+            if w_orig > max_w:
+                scale = max_w / w_orig
+                frame = cv2.resize(frame, (max_w, int(h_orig * scale)),
+                                   interpolation=cv2.INTER_AREA)
+
             # Run detection on sampled frames
             if frame_idx % frame_skip == 0:
                 detections = pipeline._detect_in_memory(frame)

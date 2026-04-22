@@ -42,7 +42,13 @@ class ONNXDetector:
         print(f"[ONNX] Available providers: {available}")
         print(f"[ONNX] Using providers: {providers}")
 
-        self.session = ort.InferenceSession(model_path, providers=providers)
+        # Limit CPU threads to prevent hogging all cores on edge devices
+        sess_opts = ort.SessionOptions()
+        sess_opts.intra_op_num_threads = 2
+        sess_opts.inter_op_num_threads = 1
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        self.session = ort.InferenceSession(model_path, sess_options=sess_opts, providers=providers)
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
 
