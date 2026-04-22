@@ -544,15 +544,26 @@ class VideoPipeline:
         self.fast_mode = getattr(config, 'FAST_MODE', False)
         self.yolo_imgsz = getattr(config, 'YOLO_IMGSZ', 640)
 
-        # Detection — pure ONNX Runtime (no PyTorch needed)
-        from onnx_detector import ONNXDetector
-        model_path = getattr(config, 'MODEL_PATH_ONNX', '')
-        if not model_path or not os.path.exists(model_path):
-            # Fallback to .pt path but with .onnx extension
-            model_path = config.MODEL_PATH.replace('.pt', '.onnx')
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"ONNX model not found: {model_path}. Export with: python export_model.py")
-        self.yolo = ONNXDetector(model_path, imgsz=self.yolo_imgsz)
+        # Detection — prefer TFLite (TinyML) > ONNX
+        tflite_path = getattr(config, 'MODEL_PATH_TFLITE', '')
+        onnx_path = getattr(config, 'MODEL_PATH_ONNX', '')
+
+        if tflite_path and os.path.exists(tflite_path):
+            from tflite_detector import TFLiteDetector
+            self.yolo = TFLiteDetector(tflite_path, imgsz=self.yolo_imgsz)
+        elif onnx_path and os.path.exists(onnx_path):
+            from onnx_detector import ONNXDetector
+            self.yolo = ONNXDetector(onnx_path, imgsz=self.yolo_imgsz)
+        else:
+            # Last resort: try .onnx from .pt path
+            fallback = config.MODEL_PATH.replace('.pt', '.onnx')
+            if os.path.exists(fallback):
+                from onnx_detector import ONNXDetector
+                self.yolo = ONNXDetector(fallback, imgsz=self.yolo_imgsz)
+            else:
+                raise FileNotFoundError(
+                    f"No model found! Place best.tflite or best.onnx in {config.BASE_DIR}"
+                )
         print(f"[DET] YOLO ready. (imgsz={self.yolo_imgsz}, fast={self.fast_mode})")
 
         # OCR
