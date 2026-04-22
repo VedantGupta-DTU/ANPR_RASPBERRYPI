@@ -14,8 +14,8 @@ MODEL_PATH_TFLITE = os.path.join(BASE_DIR, "best.tflite")  # TinyML — fastest 
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 TEST_IMAGES_DIR = os.path.join(BASE_DIR, "test_images")
 
-# YOLO inference input size (320 = ~4× faster than 640 on edge devices)
-YOLO_IMGSZ = 320
+# YOLO inference input size (must match the ONNX model export size)
+YOLO_IMGSZ = 640
 
 # Create directories if they don't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)

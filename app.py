@@ -240,8 +240,34 @@ def _generate_live_frames(source=0):
     global _live_active
     pipeline = get_pipeline()
 
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
+    # ── Open camera: try GStreamer (Jetson CSI) → V4L2/USB fallback ──
+    cap = None
+    if isinstance(source, int) or (isinstance(source, str) and source.isdigit()):
+        cam_id = int(source) if isinstance(source, str) else source
+        # Try Jetson GStreamer pipeline first (for CSI cameras like IMX219)
+        gst_pipeline = (
+            f"nvarguscamerasrc sensor-id={cam_id} ! "
+            f"video/x-raw(memory:NVMM),width=640,height=480,framerate=30/1 ! "
+            f"nvvidconv ! video/x-raw,format=BGRx ! "
+            f"videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
+        )
+        cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+        if cap.isOpened():
+            print("[CAM] Opened Jetson CSI camera via GStreamer")
+        else:
+            cap.release()
+            # Fallback: standard USB / V4L2
+            cap = cv2.VideoCapture(cam_id)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                print(f"[CAM] Opened USB camera {cam_id}")
+    else:
+        # URL or RTSP stream
+        cap = cv2.VideoCapture(source)
+
+    if cap is None or not cap.isOpened():
+        print("[CAM] ERROR: Could not open any camera!")
         yield b''
         return
 
