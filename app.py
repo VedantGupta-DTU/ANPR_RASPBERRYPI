@@ -236,7 +236,19 @@ def process_video():
 # ---------------------------------------------------------------------------
 
 def _generate_live_frames(source=0):
-    """Generator: yield MJPEG frames with ANPR overlay."""
+    """Generator: yield MJPEG frames with ANPR overlay.
+
+    Architecture (async producer-consumer):
+      Main thread:  capture → detect → draw bbox → encode JPEG → yield
+      OCR thread:   pull crops from queue → run OCR → update shared results
+
+    Result: bounding boxes appear instantly (~15ms with TensorRT),
+    plate text fills in asynchronously (~0.5-1s later).
+    Video feed NEVER freezes waiting for OCR.
+    """
+    import threading
+    import queue as queue_mod
+
     global _live_active
     pipeline = get_pipeline()
 
@@ -273,7 +285,16 @@ def _generate_live_frames(source=0):
 
     frame_idx = 0
     frame_skip = pipeline.frame_skip
-    last_results = []
+
+    # ── Shared state between main thread and OCR worker ──
+    # Key = bbox tuple, Value = {"text": str, "conf": float, "is_valid": bool}
+    ocr_results = {}
+    ocr_results_lock = threading.Lock()
+    ocr_queue = queue_mod.Queue(maxsize=getattr(config, 'MAX_PENDING_OCR', 5))
+    ocr_stop = threading.Event()
+
+    # Track which bbox regions we've already sent for OCR (dedup)
+    _ocr_cache = {}  # key=bbox_key → True (already queued)
 
     # Prepare CSV file
     csv_path = "result.csv"
@@ -282,6 +303,70 @@ def _generate_live_frames(source=0):
     csv_writer = csv.writer(csv_file)
     if not file_exists:
         csv_writer.writerow(["timestamp", "plate", "det_conf", "ocr_conf"])
+
+    def _bbox_key(bbox):
+        """Round bbox to 20px grid for dedup (same plate = same grid cell)."""
+        return (bbox[0] // 20, bbox[1] // 20, bbox[2] // 20, bbox[3] // 20)
+
+    # ── OCR Worker Thread ──
+    def _ocr_worker():
+        """Background thread: processes plate crops and updates shared results."""
+        while not ocr_stop.is_set():
+            try:
+                item = ocr_queue.get(timeout=0.5)
+            except queue_mod.Empty:
+                continue
+
+            crop, bbox, det_conf = item
+            bbox_k = _bbox_key(bbox)
+
+            try:
+                text, is_valid, ocr_conf = pipeline.ocr.read_numpy(crop)
+            except Exception:
+                text, is_valid, ocr_conf = "", False, 0.0
+
+            # Update shared results
+            with ocr_results_lock:
+                ocr_results[bbox_k] = {
+                    "text": text if is_valid else "",
+                    "conf": det_conf,
+                    "ocr_conf": ocr_conf,
+                    "is_valid": is_valid,
+                    "bbox": bbox,
+                }
+
+            # Log valid plates
+            if is_valid:
+                ts = datetime.datetime.now().isoformat()
+                try:
+                    if getattr(config, 'DB_ALSO_CSV', True):
+                        csv_writer.writerow([
+                            ts, text,
+                            round(det_conf, 3),
+                            round(ocr_conf, 3)
+                        ])
+                        csv_file.flush()
+                    anpr_db.insert_detection(
+                        plate=text,
+                        det_conf=round(det_conf, 3),
+                        ocr_conf=round(ocr_conf, 3),
+                        source="live_camera",
+                        source_type="live",
+                        is_valid=True,
+                        bbox=bbox,
+                        timestamp=ts,
+                    )
+                except Exception:
+                    pass
+
+            ocr_queue.task_done()
+
+    # Start OCR worker
+    ocr_thread = threading.Thread(target=_ocr_worker, daemon=True)
+    ocr_thread.start()
+
+    # ── Current detection bboxes (updated every detection frame) ──
+    current_detections = []  # List of {"bbox", "conf"}
 
     with _live_lock:
         _live_active = True
@@ -296,7 +381,7 @@ def _generate_live_frames(source=0):
                     break
                 time.sleep(0.1)
                 continue
-            
+
             retry_count = 0
 
             # ── Edge optimization: cap frame resolution to 640px wide ──
@@ -307,69 +392,88 @@ def _generate_live_frames(source=0):
                 frame = cv2.resize(frame, (max_w, int(h_orig * scale)),
                                    interpolation=cv2.INTER_AREA)
 
-            # Run detection on sampled frames
+            # ── Run detection on sampled frames (FAST — GPU accelerated) ──
             if frame_idx % frame_skip == 0:
                 detections = pipeline._detect_in_memory(frame)
-                last_results = []
+                current_detections = []
+
+                # Clear stale OCR cache entries
+                active_keys = set()
+
                 for det in detections:
-                    crop = pipeline._crop_plate(frame, det["bbox"])
+                    bbox = det["bbox"]
+                    bbox_k = _bbox_key(bbox)
+                    active_keys.add(bbox_k)
+
+                    current_detections.append({
+                        "bbox": bbox,
+                        "conf": det["confidence"],
+                    })
+
+                    # Skip bike plates if configured
                     if getattr(config, "IGNORE_BIKE_PLATES", False):
+                        crop = pipeline._crop_plate(frame, bbox)
                         crop_h, crop_w = crop.shape[:2]
                         if crop_w > 0 and (crop_h / crop_w) > 0.65:
                             continue
-                    text, is_valid, ocr_conf = pipeline.ocr.read_numpy(crop)
-                    
-                    if is_valid:
-                        ts = datetime.datetime.now().isoformat()
-                        if getattr(config, 'DB_ALSO_CSV', True):
-                            csv_writer.writerow([
-                                ts, text, 
-                                round(det["confidence"], 3), 
-                                round(ocr_conf, 3)
-                            ])
-                            csv_file.flush()
 
-                        # Save to database
-                        anpr_db.insert_detection(
-                            plate=text,
-                            det_conf=round(det["confidence"], 3),
-                            ocr_conf=round(ocr_conf, 3),
-                            source="live_camera",
-                            source_type="live",
-                            is_valid=True,
-                            bbox=det["bbox"],
-                            timestamp=ts,
-                        )
+                    # Only queue OCR if we haven't already for this bbox position
+                    if bbox_k not in _ocr_cache:
+                        _ocr_cache[bbox_k] = True
+                        crop = pipeline._crop_plate(frame, bbox)
+                        try:
+                            ocr_queue.put_nowait(
+                                (crop, bbox, det["confidence"]))
+                        except queue_mod.Full:
+                            pass  # Drop — OCR is overloaded, skip this plate
 
-                    last_results.append({
-                        "bbox": det["bbox"],
-                        "text": text if is_valid else "",
-                        "conf": det["confidence"],
-                        "is_valid": is_valid,
-                    })
+                # Prune stale cache entries (plates that left the frame)
+                stale_keys = [k for k in _ocr_cache if k not in active_keys]
+                for k in stale_keys:
+                    _ocr_cache.pop(k, None)
+                    with ocr_results_lock:
+                        ocr_results.pop(k, None)
 
-            # Draw bounding boxes
+            # ── Draw bounding boxes (instant — no OCR wait) ──
             display = frame.copy()
-            for r in last_results:
-                x1, y1, x2, y2 = r["bbox"]
-                color = (0, 255, 0) if r["text"] else (0, 0, 255)
-                cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
-                if r["text"]:
-                    label = f"{r['text']} ({r['conf']:.2f})"
-                    (tw, th), _ = cv2.getTextSize(
-                        label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                    cv2.rectangle(display, (x1, y1 - th - 10),
-                                  (x1 + tw, y1), color, -1)
-                    cv2.putText(display, label, (x1, y1 - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+            snapshot_needed = False
 
-            # Save snapshot if a valid plate was newly detected in this cycle
-            if frame_idx % frame_skip == 0 and any(r["is_valid"] for r in last_results):
-                snapshot_path = os.path.join(UPLOAD_DIR, f"live_plate_{uuid.uuid4().hex[:8]}.jpg")
+            for det in current_detections:
+                bbox = det["bbox"]
+                bbox_k = _bbox_key(bbox)
+                x1, y1, x2, y2 = bbox
+
+                # Check if OCR result is available for this bbox
+                with ocr_results_lock:
+                    ocr_res = ocr_results.get(bbox_k)
+
+                if ocr_res and ocr_res.get("text"):
+                    # Green = recognized plate
+                    color = (0, 255, 0)
+                    label = f"{ocr_res['text']} ({det['conf']:.2f})"
+                    snapshot_needed = True
+                else:
+                    # Cyan = detected, pending OCR
+                    color = (255, 255, 0)
+                    label = f"Detecting... ({det['conf']:.2f})"
+
+                cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+                (tw, th), _ = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                cv2.rectangle(display, (x1, y1 - th - 10),
+                              (x1 + tw, y1), color, -1)
+                cv2.putText(display, label, (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+            # Save snapshot if valid plates detected
+            if snapshot_needed and frame_idx % frame_skip == 0:
+                snapshot_path = os.path.join(
+                    UPLOAD_DIR, f"live_plate_{uuid.uuid4().hex[:8]}.jpg")
                 cv2.imwrite(snapshot_path, display)
 
             # Encode as JPEG
-            _, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            _, jpeg = cv2.imencode('.jpg', display,
+                                   [cv2.IMWRITE_JPEG_QUALITY, 80])
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' +
                    jpeg.tobytes() + b'\r\n')
@@ -377,6 +481,8 @@ def _generate_live_frames(source=0):
             frame_idx += 1
 
     finally:
+        ocr_stop.set()
+        ocr_thread.join(timeout=2)
         cap.release()
         try:
             csv_file.close()

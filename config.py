@@ -11,6 +11,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 MODEL_PATH_ONNX = os.path.join(BASE_DIR, "best.onnx")
 MODEL_PATH_TFLITE = os.path.join(BASE_DIR, "best.tflite")  # TinyML — fastest on ARM
+MODEL_PATH_ENGINE = os.path.join(BASE_DIR, "best_fp16.engine")  # TensorRT — fastest on Jetson GPU
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 TEST_IMAGES_DIR = os.path.join(BASE_DIR, "test_images")
 

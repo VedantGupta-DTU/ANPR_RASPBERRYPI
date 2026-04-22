@@ -544,27 +544,61 @@ class VideoPipeline:
         self.fast_mode = getattr(config, 'FAST_MODE', False)
         self.yolo_imgsz = getattr(config, 'YOLO_IMGSZ', 640)
 
-        # Detection — prefer TFLite (TinyML) > ONNX
+        # Detection — priority: TensorRT GPU > ONNX+CUDA > TFLite > ONNX CPU
+        engine_path = getattr(config, 'MODEL_PATH_ENGINE', '')
         tflite_path = getattr(config, 'MODEL_PATH_TFLITE', '')
         onnx_path = getattr(config, 'MODEL_PATH_ONNX', '')
+        if not onnx_path or not os.path.exists(onnx_path):
+            onnx_path = config.MODEL_PATH.replace('.pt', '.onnx')
 
-        if tflite_path and os.path.exists(tflite_path):
-            from tflite_detector import TFLiteDetector
-            self.yolo = TFLiteDetector(tflite_path, imgsz=self.yolo_imgsz)
-        elif onnx_path and os.path.exists(onnx_path):
+        self.yolo = None
+        detector_name = "none"
+
+        # 1. TensorRT (Jetson GPU — fastest)
+        if self.yolo is None:
+            try:
+                # Check if engine exists OR if we can build from ONNX
+                can_build = os.path.exists(onnx_path)
+                if (engine_path and os.path.exists(engine_path)) or can_build:
+                    from tensorrt_detector import TensorRTDetector
+                    src = engine_path if os.path.exists(engine_path) else onnx_path
+                    self.yolo = TensorRTDetector(src, imgsz=self.yolo_imgsz)
+                    detector_name = "TensorRT GPU"
+            except Exception as e:
+                print(f"[DET] TensorRT unavailable: {e}")
+
+        # 2. ONNX Runtime + CUDA (Jetson GPU — good)
+        if self.yolo is None and os.path.exists(onnx_path):
+            try:
+                import onnxruntime as ort
+                providers = ort.get_available_providers()
+                if 'CUDAExecutionProvider' in providers:
+                    from onnx_detector import ONNXDetector
+                    self.yolo = ONNXDetector(onnx_path, imgsz=self.yolo_imgsz)
+                    detector_name = "ONNX Runtime + CUDA"
+            except Exception as e:
+                print(f"[DET] ONNX CUDA unavailable: {e}")
+
+        # 3. TFLite (ARM XNNPACK — lightweight)
+        if self.yolo is None and tflite_path and os.path.exists(tflite_path):
+            try:
+                from tflite_detector import TFLiteDetector
+                self.yolo = TFLiteDetector(tflite_path, imgsz=self.yolo_imgsz)
+                detector_name = "TFLite XNNPACK"
+            except Exception as e:
+                print(f"[DET] TFLite unavailable: {e}")
+
+        # 4. ONNX Runtime CPU (fallback)
+        if self.yolo is None and os.path.exists(onnx_path):
             from onnx_detector import ONNXDetector
             self.yolo = ONNXDetector(onnx_path, imgsz=self.yolo_imgsz)
-        else:
-            # Last resort: try .onnx from .pt path
-            fallback = config.MODEL_PATH.replace('.pt', '.onnx')
-            if os.path.exists(fallback):
-                from onnx_detector import ONNXDetector
-                self.yolo = ONNXDetector(fallback, imgsz=self.yolo_imgsz)
-            else:
-                raise FileNotFoundError(
-                    f"No model found! Place best.tflite or best.onnx in {config.BASE_DIR}"
-                )
-        print(f"[DET] YOLO ready. (imgsz={self.yolo_imgsz}, fast={self.fast_mode})")
+            detector_name = "ONNX Runtime CPU"
+
+        if self.yolo is None:
+            raise FileNotFoundError(
+                f"No model found! Place best.engine, best.onnx, or best.tflite in {config.BASE_DIR}"
+            )
+        print(f"[DET] YOLO ready via {detector_name}. (imgsz={self.yolo_imgsz}, fast={self.fast_mode})")
 
         # OCR
         self.ocr = InMemoryOCR(engine=engine)
